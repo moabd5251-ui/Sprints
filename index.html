@@ -301,6 +301,11 @@ textarea{width:100%;min-height:150px;border:1.5px solid var(--line);background:v
         <textarea id="kaizenNote" style="min-height:90px" placeholder="e.g. Try admin after 5 pm instead of first thing"></textarea>
       </div>
       <div class="card">
+        <h2>Repeating tasks</h2>
+        <p class="sub">Add these in the brain dump with words like “every month on the 15th”, “every friday”, “every other monday” or “daily”. Each one shows up on its own a few days before it’s due.</p>
+        <ul class="tasks" id="repList"></ul>
+      </div>
+      <div class="card">
         <h2>Backup</h2>
         <p class="sub">Save a backup file to your phone so your entries can’t be lost. It never leaves your device unless you send it somewhere.</p>
         <p class="sub" id="backupStatus"></p>
@@ -376,6 +381,7 @@ function addLog(text,auto){S.log.push({id:uid(),t:new Date().toISOString(),text,
 function maintain(){
   const t=today();let changed=false;
   if(S.highlight.date!==t){S.highlight={date:t,text:"",started:false,done:false};changed=true}
+  if(spawnRepeats())changed=true;
   S.tasks.forEach(x=>{if(x.cat==="deadline"&&x.due&&x.due<=t&&!x.done){x.cat="urgent";changed=true}});
   const weekAgo=Date.now()-7*864e5;
   const n=S.tasks.length;S.tasks=S.tasks.filter(x=>!(x.done&&x.doneAt&&x.doneAt<weekAgo));if(S.tasks.length!==n)changed=true;
@@ -439,7 +445,7 @@ function renderBoard(){
     items.forEach(t=>{
       const li=document.createElement("li");if(t.done)li.className="done";
       const late=t.due&&t.due<today();
-      li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><span class="txt">${esc(t.text)}${t.wk?`<span class="linked">· on week plan</span>`:""}${t.due?`<span class="due ${late?"late":""}">${dueLabel(t.due)}</span>`:""}</span>
+      li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><span class="txt">${esc(t.text)}${t.rep?`<span class="linked">↻ repeats</span>`:""}${t.wk?`<span class="linked">· on week plan</span>`:""}${t.due?`<span class="due ${late?"late":""}">${dueLabel(t.due)}</span>`:""}</span>
         <span class="acts"><button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
       li.querySelector(".chk").onchange=e=>{t.done=e.target.checked;t.doneAt=t.done?Date.now():null;if(t.done)addLog("Done: "+t.text+" ("+name(t.cat)+")",true);syncFromTask(t);save();renderBoard();renderWeek()};
       const back=li.querySelector(".act.back"),del=li.querySelector(".act.del");
@@ -531,7 +537,14 @@ function parseLine(line){
   else if(W_ADMIN.test(s)){cat="admin";mode="sprint"}
   else if(W_CREATIVE.test(s)){cat="creative";mode="sprint"}
   else if(ds){cat="deadline";mode="sprint"}
-  return{ds,time,cat,mode};
+  let rp=null;
+  const wd=(()=>{const d=s.match(DAYRX);if(!d)return null;const i=["mo","tu","we","th","fr","sa","su"].indexOf(d[2].slice(0,2));return i>=0?i:null})();
+  const md=(()=>{const m=s.match(/\b(\d{1,2})(?:st|nd|rd|th)\b/);return m&&+m[1]>=1&&+m[1]<=31?+m[1]:null})();
+  if(/\b(every ?day|daily|each day)\b/.test(s))rp={freq:"daily"};
+  else if(/\b(every month|monthly|each month|every \d{1,2}(st|nd|rd|th))\b/.test(s))rp={freq:"monthly",monthday:md||(date?date.getDate():base.getDate())};
+  else if(/\b(every (other|2|two) (weeks?|mon|tue|wed|thu|fri|sat|sun)[a-z]*|bi-?weekly|every two weeks)\b/.test(s))rp={freq:"biweekly",weekday:wd};
+  else if(/\b(every (week|mon|tue|wed|thu|fri|sat|sun)[a-z]*|weekly|each week)\b/.test(s))rp={freq:"weekly",weekday:wd};
+  return{ds,time,cat,mode,rp};
 }
 function weekByDate(ds){const d=new Date(ds+"T00:00");const m=new Date(d);m.setDate(d.getDate()-((d.getDay()+6)%7));const k=ymd(m);if(!S.weeks)S.weeks={};if(!S.weeks[k])S.weeks[k]={anchor:"",steps:["","",""],items:[],review:{}};return{key:k,w:S.weeks[k],idx:(d.getDay()+6)%7}}
 function addWeekItem(text,ds,star,linkTask){const {key,w,idx}=weekByDate(ds);const it={id:uid(),text,star:!!star,done:false,cells:{[idx]:"plan"}};if(linkTask){it.link=linkTask.id;linkTask.wk={key,id:it.id}}w.items.push(it);return it}
@@ -540,6 +553,7 @@ $("#dumpOrg").onclick=()=>{
   const c={urgent:0,deadline:0,admin:0,creative:0,week:0,inbox:0};
   ls.forEach(text=>{
     const r=parseLine(text);
+    if(r.rp){addRepeat(text,r);c.repeat=(c.repeat||0)+1;return}
     if(r.mode==="week"&&r.time){const cat=r.ds<=today()?"urgent":"deadline";const t={id:uid(),text,cat,due:r.ds,done:false};S.tasks.push(t);c[cat]++;addWeekItem(text,r.ds,true,t)}
     else if(r.mode==="week"){addWeekItem(text,r.ds,false,null);c.week++}
     else if(r.mode==="sprint"){
@@ -548,14 +562,77 @@ $("#dumpOrg").onclick=()=>{
       if(r.ds)addWeekItem(text,r.ds,r.cat==="urgent",t);
     }else{S.tasks.push({id:uid(),text,cat:"inbox",due:null,done:false});c.inbox++}
   });
-  $("#dumpText").value="";save();renderInbox();renderBoard();renderWeek();
+  $("#dumpText").value="";save();renderInbox();renderBoard();renderWeek();renderRepeats();
   const parts=[];CATS.forEach(k=>{if(c[k.k])parts.push(c[k.k]+" to "+name(k.k))});
   if(c.week)parts.push(c.week+" to the week plan only");
+  if(c.repeat)parts.push(c.repeat+" set to repeat (see Review)");
   if(c.inbox)parts.push(c.inbox+" left in your inbox to sort by hand");
   $("#dumpResult").textContent="Placed: "+parts.join(", ")+". Items with a day also got a dot on the week plan.";
   toast("Organized "+ls.length+(ls.length===1?" item":" items"));
 };
 $("#dumpAdd").onclick=()=>{const ls=dumpLines();if(!ls.length)return;ls.forEach(text=>{const r=parseLine(text);S.tasks.push({id:uid(),text,cat:"inbox",due:r.ds&&r.mode!=="week"?r.ds:null,sugDate:r.ds,done:false})});$("#dumpText").value="";$("#dumpResult").textContent="";save();renderInbox();toast(ls.length+" added to inbox")};
+
+/* Repeating tasks */
+const REP_LEAD={daily:0,weekly:1,biweekly:2,monthly:3};
+const dayDiff=(a,b)=>Math.round((new Date(b+"T00:00")-new Date(a+"T00:00"))/864e5);
+function monthDate(y,m,md){while(m>11){m-=12;y++}return new Date(y,m,Math.min(md,new Date(y,m+1,0).getDate()))}
+function firstDue(rp){
+  const b=new Date();b.setHours(0,0,0,0);const cur=(b.getDay()+6)%7;
+  if(rp.freq==="daily")return ymd(b);
+  if(rp.freq==="weekly"||rp.freq==="biweekly"){const wd=rp.weekday==null?cur:rp.weekday;const d=new Date(b);d.setDate(d.getDate()+((wd-cur+7)%7));return ymd(d)}
+  let d=monthDate(b.getFullYear(),b.getMonth(),rp.monthday);if(d<b)d=monthDate(b.getFullYear(),b.getMonth()+1,rp.monthday);return ymd(d);
+}
+function nextDue(rp,ds){
+  const d=new Date(ds+"T00:00");
+  if(rp.freq==="daily")d.setDate(d.getDate()+1);
+  else if(rp.freq==="weekly")d.setDate(d.getDate()+7);
+  else if(rp.freq==="biweekly")d.setDate(d.getDate()+14);
+  else return ymd(monthDate(d.getFullYear(),d.getMonth()+1,rp.monthday));
+  return ymd(d);
+}
+function repLabel(rp){
+  const dn=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const ord=n=>n+(n%10===1&&n!==11?"st":n%10===2&&n!==12?"nd":n%10===3&&n!==13?"rd":"th");
+  if(rp.freq==="daily")return"Every day";
+  if(rp.freq==="weekly")return"Every "+(rp.weekday==null?"week":dn[rp.weekday]);
+  if(rp.freq==="biweekly")return"Every other "+(rp.weekday==null?"week":dn[rp.weekday]);
+  return"Every month on the "+ord(rp.monthday);
+}
+function addRepeat(text,r){
+  if(!S.repeats)S.repeats=[];
+  const rp=Object.assign({id:uid(),text,cat:r.cat&&r.cat!=="urgent"&&r.cat!=="deadline"?r.cat:null},r.rp);
+  rp.next=firstDue(rp);S.repeats.push(rp);spawnRepeats();
+}
+function spawnRepeats(){
+  if(!S.repeats||!S.repeats.length)return false;
+  const td=today();let made=false;
+  S.repeats.forEach(rp=>{
+    let g=0;
+    while(rp.next<td&&nextDue(rp,rp.next)<=td&&g++<400)rp.next=nextDue(rp,rp.next);
+    g=0;
+    while(rp.next&&dayDiff(td,rp.next)<=REP_LEAD[rp.freq]&&g++<10){
+      const due=rp.next;
+      const cat=rp.freq==="daily"?(rp.cat||"admin"):"deadline";
+      const t={id:uid(),text:rp.text,cat,due,done:false,rep:rp.id};
+      S.tasks.push(t);
+      if(rp.freq!=="daily")addWeekItem(rp.text,due,false,t);
+      rp.next=nextDue(rp,due);made=true;
+    }
+  });
+  return made;
+}
+function renderRepeats(){
+  const ul=$("#repList");if(!ul)return;ul.innerHTML="";
+  const list=S.repeats||[];
+  if(!list.length){ul.innerHTML=`<li class="empty">No repeating tasks yet.</li>`;return}
+  list.forEach(rp=>{
+    const li=document.createElement("li");li.style.setProperty("--c","var(--ink)");
+    const nd=new Date(rp.next+"T00:00").toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
+    li.innerHTML=`<span class="txt">${esc(rp.text)}<span class="due">${repLabel(rp)} · next ${nd}</span></span><span class="acts"><button class="act del">Stop</button></span>`;
+    li.querySelector(".del").onclick=()=>{const i=S.repeats.indexOf(rp);S.repeats.splice(i,1);save();renderRepeats();toast("Stopped repeating",()=>{S.repeats.splice(i,0,rp);save();renderRepeats()})};
+    ul.appendChild(li);
+  });
+}
 
 /* Log */
 function renderLog(){
@@ -696,7 +773,7 @@ function migrateAppts(){
     const t={id:uid(),text:it.text,cat:ds<=today()?"urgent":"deadline",due:ds,done:false,wk:{key,id:it.id}};S.tasks.push(t);it.link=t.id;
   }));save();
 }
-function renderAll(){migrateAppts();migrateDated();maintain();renderHL();renderBoard();renderInbox();renderLog();renderSettings();renderWeek();$("#kaizenNote").value=S.note||""}
+function renderAll(){migrateAppts();migrateDated();maintain();renderRepeats();renderHL();renderBoard();renderInbox();renderLog();renderSettings();renderWeek();$("#kaizenNote").value=S.note||""}
 renderAll();routeFromHash();
 
 /* Privacy: everything stays in this browser on this device. No cloud sync, no AI calls. */
