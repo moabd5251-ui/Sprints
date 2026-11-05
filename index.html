@@ -178,6 +178,7 @@ textarea{width:100%;min-height:150px;border:1.5px solid var(--line);background:v
 .toast button{background:none;border:0;color:inherit;text-decoration:underline;font-weight:700;padding:2px 4px}
 .acts{display:flex;gap:8px;flex:none;align-items:center}
 .act{border:1.5px solid var(--line);border-radius:999px;padding:5px 11px;font-size:.8rem;font-weight:700;background:none;color:var(--muted)}
+.act.cal.on{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 50%,transparent)}
 .act.del{color:var(--urgent);border-color:color-mix(in srgb,var(--urgent) 45%,transparent)}
 @media (prefers-reduced-motion: reduce){.toast{transition:none}}
 </style>
@@ -446,10 +447,10 @@ function renderBoard(){
       const li=document.createElement("li");if(t.done)li.className="done";
       const late=t.due&&t.due<today();
       li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><span class="txt">${esc(t.text)}${t.rep?`<span class="linked">↻ repeats</span>`:""}${t.wk?`<span class="linked">· on week plan</span>`:""}${t.due?`<span class="due ${late?"late":""}">${dueLabel(t.due)}</span>`:""}</span>
-        <span class="acts">${calInfo(t.text,t.due)?`<button class="act cal" aria-label="Add to calendar">Calendar</button>`:""}<button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
+        <span class="acts">${calInfo(t.text,t.due)?`<button class="act cal ${calOn(t)?"on":""}" aria-label="${calOn(t)?"On calendar. Tap to add again":"Add to calendar"}">${calOn(t)?"On calendar ✓":"Calendar"}</button>`:""}<button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
       li.querySelector(".chk").onchange=e=>{t.done=e.target.checked;t.doneAt=t.done?Date.now():null;if(t.done)addLog("Done: "+t.text+" ("+name(t.cat)+")",true);syncFromTask(t);save();renderBoard();renderWeek()};
       const back=li.querySelector(".act.back"),del=li.querySelector(".act.del"),calb=li.querySelector(".act.cal");
-      if(calb)calb.onclick=()=>addToCalendar(t.text,calInfo(t.text,t.due));
+      if(calb)calb.onclick=async()=>{if(await addToCalendar(t.text,calInfo(t.text,t.due)))markCal(t,null)};
       back.onclick=()=>{const old=t.cat;t.cat="inbox";save();renderBoard();renderInbox();toast("Moved to your inbox on the Dump tab",()=>{t.cat=old;save();renderBoard();renderInbox()})};
       del.onclick=()=>deleteTask(t);
       ul.appendChild(li);
@@ -600,8 +601,19 @@ async function addToCalendar(text,info){
   }
   lines.push("END:VEVENT","END:VCALENDAR");
   const slug=text.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,30)||"event";
-  try{await saveFile("event-"+slug+".ics",lines.join("\r\n")+"\r\n","text/calendar");toast("Open the downloaded file and tap Save in your calendar")}
-  catch(e){toast("Couldn’t make the calendar file")}
+  try{await saveFile("event-"+slug+".ics",lines.join("\r\n")+"\r\n","text/calendar");return true}
+  catch(e){toast("Couldn’t make the calendar file");return false}
+}
+function linkedPair(task,item){
+  if(task&&!item){const f=findWeekItem(task);item=f?f.it:null}
+  if(item&&!task&&item.link)task=S.tasks.find(y=>y.id===item.link)||null;
+  return{task,item};
+}
+function calOn(task,item){const p=linkedPair(task,item);return !!((p.task&&p.task.cal)||(p.item&&p.item.cal))}
+function markCal(task,item){
+  const p=linkedPair(task,item),prev={t:p.task&&p.task.cal,i:p.item&&p.item.cal};
+  if(p.task)p.task.cal=true;if(p.item)p.item.cal=true;save();renderBoard();renderWeek();
+  toast("Marked as on your calendar. Open the file and tap Save.",()=>{if(p.task)p.task.cal=prev.t;if(p.item)p.item.cal=prev.i;save();renderBoard();renderWeek()});
 }
 
 /* Repeating tasks */
@@ -741,7 +753,7 @@ function renderWeek(){
   let html=`<thead><tr>${DAYS.map((d,i)=>`<th class="${i===todayIdx?"today":""}" title="${DAYN[i]}"><span>${d}</span></th>`).join("")}</tr></thead><tbody>`;
   if(!w.items.length)html+=`<tr><td colspan="7" class="empty" style="padding:10px 0">No tasks for this week yet. Add one below.</td></tr>`;
   w.items.forEach(it=>{
-    html+=`<tr class="trow ${it.done?"done":""}" data-id="${it.id}"><td colspan="7"><div class="wk-task"><input type="checkbox" class="chk" ${it.done?"checked":""} aria-label="Done"><button class="star ${it.star?"on":""}" aria-label="Non-negotiable">★</button><span class="txt">${esc(it.text)}${it.link&&S.tasks.some(y=>y.id===it.link)?`<span class="linked">· in sprints</span>`:""}</span>${weekCalDate(it)?`<button class="mini calbtn" aria-label="Add to calendar" title="Add to calendar">📅</button>`:""}<button class="mini" aria-label="Delete">×</button></div></td></tr>`+
+    html+=`<tr class="trow ${it.done?"done":""}" data-id="${it.id}"><td colspan="7"><div class="wk-task"><input type="checkbox" class="chk" ${it.done?"checked":""} aria-label="Done"><button class="star ${it.star?"on":""}" aria-label="Non-negotiable">★</button><span class="txt">${esc(it.text)}${it.link&&S.tasks.some(y=>y.id===it.link)?`<span class="linked">· in sprints</span>`:""}</span>${weekCalDate(it)?`<button class="mini calbtn" aria-label="${calOn(null,it)?"On calendar. Tap to add again":"Add to calendar"}" title="${calOn(null,it)?"On calendar":"Add to calendar"}">${calOn(null,it)?"✅":"📅"}</button>`:""}<button class="mini" aria-label="Delete">×</button></div></td></tr>`+
       `<tr class="drow" data-id="${it.id}">`+DAYS.map((d,i)=>{const v=(it.cells||{})[i]||"";return `<td class="cell ${i===todayIdx?"today":""}"><button class="dot ${v}" data-i="${i}" aria-label="${DAYN[i]}: ${v||"empty"}"><i></i></button></td>`}).join("")+`</tr>`;
   });
   const counts=DAYS.map((d,i)=>w.items.filter(it=>!it.done&&["plan","both"].includes((it.cells||{})[i])).length);
@@ -752,7 +764,7 @@ function renderWeek(){
   $("#wkWarn").innerHTML=busy.length?`<p class="warn">${busy.join(" and ")} ${busy.length>1?"look":"looks"} packed. Keep the starred ones and move a few dots.</p>`:"";
   const it=el=>wk(wkOff).items.find(x=>x.id===el.closest("tr").dataset.id);
   t.querySelectorAll(".trow .chk").forEach(c=>c.onchange=e=>{const x=it(c);x.done=e.target.checked;if(x.done&&wkOff===0)markToday(x,ymd(monday(0)));if(x.link){const tk=S.tasks.find(y=>y.id===x.link);if(tk){tk.done=x.done;tk.doneAt=x.done?Date.now():null}}if(x.done)addLog("Done (week plan): "+x.text,true);save();renderWeek();renderBoard()});
-  t.querySelectorAll(".trow .calbtn").forEach(b=>b.onclick=()=>{const x=it(b);const ds=weekCalDate(x);if(ds)addToCalendar(x.text,{ds,time:parseLine(x.text).time})});
+  t.querySelectorAll(".trow .calbtn").forEach(b=>b.onclick=()=>{const x=it(b);const ds=weekCalDate(x);if(ds)addToCalendar(x.text,{ds,time:parseLine(x.text).time}).then(ok=>{if(ok)markCal(null,x)})});
   t.querySelectorAll(".trow .star").forEach(b=>b.onclick=()=>{const x=it(b);x.star=!x.star;save();renderWeek()});
   t.querySelectorAll(".trow .mini").forEach(b=>b.onclick=()=>{const x=it(b);const tk=x.link?S.tasks.find(y=>y.id===x.link):null;
     if(tk){deleteTask(tk);return}
