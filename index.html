@@ -84,6 +84,16 @@ h2{font-family:var(--display);font-weight:700;font-size:1.3rem;letter-spacing:-.
 .timer{font-size:.88rem;color:var(--c);font-weight:700;margin:0 0 6px}
 ul.tasks{list-style:none;margin:0;padding:0}
 ul.tasks li{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.tbody{flex:1;min-width:0}
+.tbody .txt{display:block}
+.meta{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:.8rem;color:var(--muted);margin-top:2px}
+.meta .late{color:var(--urgent);font-weight:700}
+.meta .calok{color:var(--ok);font-weight:700}
+.more{flex:none;background:none;border:0;color:var(--muted);font-size:1.3rem;line-height:1;padding:0 6px 4px;border-radius:8px}
+li.open .more{color:var(--ink);background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.acts.row{display:none;flex-basis:100%;padding-left:34px;flex-wrap:wrap;margin-top:2px}
+ul.tasks li{flex-wrap:wrap}
+li.open .acts.row{display:flex}
 ul.tasks li:first-child{border-top:0}
 ul.tasks li.done .txt{text-decoration:line-through;color:var(--muted)}
 .chk{appearance:none;width:24px;height:24px;flex:none;border:2px solid var(--c);border-radius:7px;margin-top:1px;display:grid;place-content:center;background:transparent}
@@ -446,13 +456,16 @@ function renderBoard(){
     items.forEach(t=>{
       const li=document.createElement("li");if(t.done)li.className="done";
       const late=t.due&&t.due<today();
-      li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><span class="txt">${esc(t.text)}${t.rep?`<span class="linked">↻ repeats</span>`:""}${t.wk?`<span class="linked">· on week plan</span>`:""}${t.due?`<span class="due ${late?"late":""}">${dueLabel(t.due)}</span>`:""}</span>
-        <span class="acts">${calInfo(t.text,t.due)?`<button class="act cal ${calOn(t)?"on":""}" aria-label="${calOn(t)?"On calendar. Tap to add again":"Add to calendar"}">${calOn(t)?"On calendar ✓":"Calendar"}</button>`:""}<button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
+      if(openTask===t.id)li.classList.add("open");
+      const meta=[t.due?`<span class="${late?"late":""}">${dueLabel(t.due)}</span>`:"",t.rep?`<span>↻ repeats</span>`:"",t.wk?`<span>on week plan</span>`:"",calInfo(t.text,t.due)&&calOn(t)?`<span class="calok">📅 on calendar</span>`:""].filter(Boolean).join("");
+      li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><div class="tbody"><span class="txt">${esc(t.text)}</span>${meta?`<div class="meta">${meta}</div>`:""}</div><button class="more" aria-label="More actions" aria-expanded="${openTask===t.id}">⋯</button>
+        <span class="acts row">${calInfo(t.text,t.due)?`<button class="act cal ${calOn(t)?"on":""}" aria-label="${calOn(t)?"On calendar. Tap to add again":"Add to calendar"}">${calOn(t)?"On calendar ✓":"Calendar"}</button>`:""}<button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
       li.querySelector(".chk").onchange=e=>{t.done=e.target.checked;t.doneAt=t.done?Date.now():null;if(t.done)addLog("Done: "+t.text+" ("+name(t.cat)+")",true);syncFromTask(t);save();renderBoard();renderWeek()};
       const back=li.querySelector(".act.back"),del=li.querySelector(".act.del"),calb=li.querySelector(".act.cal");
       if(calb)calb.onclick=async()=>{if(await addToCalendar(t.text,calInfo(t.text,t.due)))markCal(t,null)};
       back.onclick=()=>{const old=t.cat;t.cat="inbox";save();renderBoard();renderInbox();toast("Moved to your inbox on the Dump tab",()=>{t.cat=old;save();renderBoard();renderInbox()})};
       del.onclick=()=>deleteTask(t);
+      li.querySelector(".more").onclick=()=>{openTask=openTask===t.id?null:t.id;renderBoard()};
       ul.appendChild(li);
     });
     col.querySelector(".start").onclick=()=>toggleSprint(c.k);
@@ -574,6 +587,7 @@ $("#dumpOrg").onclick=()=>{
 };
 $("#dumpAdd").onclick=()=>{const ls=dumpLines();if(!ls.length)return;ls.forEach(text=>{const r=parseLine(text);S.tasks.push({id:uid(),text,cat:"inbox",due:r.ds&&r.mode!=="week"?r.ds:null,sugDate:r.ds,done:false})});$("#dumpText").value="";$("#dumpResult").textContent="";save();renderInbox();toast(ls.length+" added to inbox")};
 
+var openTask=null;
 /* Add to calendar: makes a small .ics file on the phone. Nothing is sent anywhere. */
 function calInfo(text,due){const r=parseLine(text);const ds=due||r.ds;return ds?{ds,time:r.time}:null}
 function weekCalDate(it){
