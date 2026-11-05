@@ -446,9 +446,10 @@ function renderBoard(){
       const li=document.createElement("li");if(t.done)li.className="done";
       const late=t.due&&t.due<today();
       li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><span class="txt">${esc(t.text)}${t.rep?`<span class="linked">↻ repeats</span>`:""}${t.wk?`<span class="linked">· on week plan</span>`:""}${t.due?`<span class="due ${late?"late":""}">${dueLabel(t.due)}</span>`:""}</span>
-        <span class="acts"><button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
+        <span class="acts">${calInfo(t.text,t.due)?`<button class="act cal" aria-label="Add to calendar">Calendar</button>`:""}<button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
       li.querySelector(".chk").onchange=e=>{t.done=e.target.checked;t.doneAt=t.done?Date.now():null;if(t.done)addLog("Done: "+t.text+" ("+name(t.cat)+")",true);syncFromTask(t);save();renderBoard();renderWeek()};
-      const back=li.querySelector(".act.back"),del=li.querySelector(".act.del");
+      const back=li.querySelector(".act.back"),del=li.querySelector(".act.del"),calb=li.querySelector(".act.cal");
+      if(calb)calb.onclick=()=>addToCalendar(t.text,calInfo(t.text,t.due));
       back.onclick=()=>{const old=t.cat;t.cat="inbox";save();renderBoard();renderInbox();toast("Moved to your inbox on the Dump tab",()=>{t.cat=old;save();renderBoard();renderInbox()})};
       del.onclick=()=>deleteTask(t);
       ul.appendChild(li);
@@ -571,6 +572,37 @@ $("#dumpOrg").onclick=()=>{
   toast("Organized "+ls.length+(ls.length===1?" item":" items"));
 };
 $("#dumpAdd").onclick=()=>{const ls=dumpLines();if(!ls.length)return;ls.forEach(text=>{const r=parseLine(text);S.tasks.push({id:uid(),text,cat:"inbox",due:r.ds&&r.mode!=="week"?r.ds:null,sugDate:r.ds,done:false})});$("#dumpText").value="";$("#dumpResult").textContent="";save();renderInbox();toast(ls.length+" added to inbox")};
+
+/* Add to calendar: makes a small .ics file on the phone. Nothing is sent anywhere. */
+function calInfo(text,due){const r=parseLine(text);const ds=due||r.ds;return ds?{ds,time:r.time}:null}
+function weekCalDate(it){
+  const key=Object.keys(S.weeks||{}).find(k=>(S.weeks[k].items||[]).includes(it));if(!key)return null;
+  const idx=Object.keys(it.cells||{}).map(Number).sort((a,b)=>a-b).find(i=>["plan","both"].includes(it.cells[i]));
+  if(idx===undefined)return null;const d=new Date(key+"T00:00");d.setDate(d.getDate()+idx);return ymd(d);
+}
+function icsEsc(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n")}
+function icsStamp(d){return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"T"+pad(d.getHours())+pad(d.getMinutes())+"00"}
+async function saveFile(filename,data,type){
+  if(typeof downloads!=="undefined"&&downloads){await downloads.save({filename,data});return}
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([data],{type}));a.download=filename;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+}
+async function addToCalendar(text,info){
+  if(!info)return;
+  const now=new Date(),u=new Date(now.getTime()+now.getTimezoneOffset()*60000);
+  const lines=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Kaizen Sprints//EN","BEGIN:VEVENT","UID:"+uid()+"@sprints","DTSTAMP:"+icsStamp(u)+"Z","SUMMARY:"+icsEsc(text)];
+  if(info.time){
+    const s=new Date(info.ds+"T"+info.time+":00"),e=new Date(s.getTime()+3600000);
+    lines.push("DTSTART:"+icsStamp(s),"DTEND:"+icsStamp(e),"BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+icsEsc(text),"TRIGGER:-PT30M","END:VALARM");
+  }else{
+    const s=new Date(info.ds+"T00:00"),e=new Date(s);e.setDate(e.getDate()+1);
+    lines.push("DTSTART;VALUE=DATE:"+info.ds.replace(/-/g,""),"DTEND;VALUE=DATE:"+ymd(e).replace(/-/g,""));
+  }
+  lines.push("END:VEVENT","END:VCALENDAR");
+  const slug=text.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,30)||"event";
+  try{await saveFile("event-"+slug+".ics",lines.join("\r\n")+"\r\n","text/calendar");toast("Open the downloaded file and tap Save in your calendar")}
+  catch(e){toast("Couldn’t make the calendar file")}
+}
 
 /* Repeating tasks */
 const REP_LEAD={daily:0,weekly:1,biweekly:2,monthly:3};
@@ -709,7 +741,7 @@ function renderWeek(){
   let html=`<thead><tr>${DAYS.map((d,i)=>`<th class="${i===todayIdx?"today":""}" title="${DAYN[i]}"><span>${d}</span></th>`).join("")}</tr></thead><tbody>`;
   if(!w.items.length)html+=`<tr><td colspan="7" class="empty" style="padding:10px 0">No tasks for this week yet. Add one below.</td></tr>`;
   w.items.forEach(it=>{
-    html+=`<tr class="trow ${it.done?"done":""}" data-id="${it.id}"><td colspan="7"><div class="wk-task"><input type="checkbox" class="chk" ${it.done?"checked":""} aria-label="Done"><button class="star ${it.star?"on":""}" aria-label="Non-negotiable">★</button><span class="txt">${esc(it.text)}${it.link&&S.tasks.some(y=>y.id===it.link)?`<span class="linked">· in sprints</span>`:""}</span><button class="mini" aria-label="Delete">×</button></div></td></tr>`+
+    html+=`<tr class="trow ${it.done?"done":""}" data-id="${it.id}"><td colspan="7"><div class="wk-task"><input type="checkbox" class="chk" ${it.done?"checked":""} aria-label="Done"><button class="star ${it.star?"on":""}" aria-label="Non-negotiable">★</button><span class="txt">${esc(it.text)}${it.link&&S.tasks.some(y=>y.id===it.link)?`<span class="linked">· in sprints</span>`:""}</span>${weekCalDate(it)?`<button class="mini calbtn" aria-label="Add to calendar" title="Add to calendar">📅</button>`:""}<button class="mini" aria-label="Delete">×</button></div></td></tr>`+
       `<tr class="drow" data-id="${it.id}">`+DAYS.map((d,i)=>{const v=(it.cells||{})[i]||"";return `<td class="cell ${i===todayIdx?"today":""}"><button class="dot ${v}" data-i="${i}" aria-label="${DAYN[i]}: ${v||"empty"}"><i></i></button></td>`}).join("")+`</tr>`;
   });
   const counts=DAYS.map((d,i)=>w.items.filter(it=>!it.done&&["plan","both"].includes((it.cells||{})[i])).length);
@@ -720,6 +752,7 @@ function renderWeek(){
   $("#wkWarn").innerHTML=busy.length?`<p class="warn">${busy.join(" and ")} ${busy.length>1?"look":"looks"} packed. Keep the starred ones and move a few dots.</p>`:"";
   const it=el=>wk(wkOff).items.find(x=>x.id===el.closest("tr").dataset.id);
   t.querySelectorAll(".trow .chk").forEach(c=>c.onchange=e=>{const x=it(c);x.done=e.target.checked;if(x.done&&wkOff===0)markToday(x,ymd(monday(0)));if(x.link){const tk=S.tasks.find(y=>y.id===x.link);if(tk){tk.done=x.done;tk.doneAt=x.done?Date.now():null}}if(x.done)addLog("Done (week plan): "+x.text,true);save();renderWeek();renderBoard()});
+  t.querySelectorAll(".trow .calbtn").forEach(b=>b.onclick=()=>{const x=it(b);const ds=weekCalDate(x);if(ds)addToCalendar(x.text,{ds,time:parseLine(x.text).time})});
   t.querySelectorAll(".trow .star").forEach(b=>b.onclick=()=>{const x=it(b);x.star=!x.star;save();renderWeek()});
   t.querySelectorAll(".trow .mini").forEach(b=>b.onclick=()=>{const x=it(b);const tk=x.link?S.tasks.find(y=>y.id===x.link):null;
     if(tk){deleteTask(tk);return}
