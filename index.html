@@ -192,6 +192,13 @@ textarea{width:100%;min-height:150px;border:1.5px solid var(--line);background:v
 .act.del{color:var(--urgent);border-color:color-mix(in srgb,var(--urgent) 45%,transparent)}
 @media (prefers-reduced-motion: reduce){.toast{transition:none}}
 </style>
+<meta name="theme-color" content="#1B2533">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Sprints">
 </head>
 <body>
 <div class="wrap">
@@ -877,5 +884,6 @@ $("#backupFile").onchange=e=>{
 };
 })();
 </script>
+<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("sw.js").catch(()=>{})})}</script>
 </body>
 </html>
