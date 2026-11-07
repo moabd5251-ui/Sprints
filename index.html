@@ -192,13 +192,6 @@ textarea{width:100%;min-height:150px;border:1.5px solid var(--line);background:v
 .act.del{color:var(--urgent);border-color:color-mix(in srgb,var(--urgent) 45%,transparent)}
 @media (prefers-reduced-motion: reduce){.toast{transition:none}}
 </style>
-<meta name="theme-color" content="#1B2533">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Sprints">
 </head>
 <body>
 <div class="wrap">
@@ -457,12 +450,12 @@ function renderBoard(){
       const li=document.createElement("li");if(t.done)li.className="done";
       const late=t.due&&t.due<today();
       if(openTask===t.id)li.classList.add("open");
-      const meta=[t.due?`<span class="${late?"late":""}">${dueLabel(t.due)}</span>`:"",t.rep?`<span>↻ repeats</span>`:"",t.wk?`<span>on week plan</span>`:"",calInfo(t.text,t.due)&&calOn(t)?`<span class="calok">📅 on calendar</span>`:""].filter(Boolean).join("");
+      const meta=[t.done?`<span>done</span>`:t.due?`<span class="${late?"late":""}">${dueLabel(t.due)}</span>`:"",t.rep?`<span>↻ repeats</span>`:"",t.wk?`<span>on week plan</span>`:"",calInfo(t.text,t.due)&&calOn(t)?`<span class="calok">📅 on calendar</span>`:""].filter(Boolean).join("");
       li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><div class="tbody"><span class="txt">${esc(t.text)}</span>${meta?`<div class="meta">${meta}</div>`:""}</div><button class="more" aria-label="More actions" aria-expanded="${openTask===t.id}">⋯</button>
         <span class="acts row">${calInfo(t.text,t.due)?`<button class="act cal ${calOn(t)?"on":""}" aria-label="${calOn(t)?"On calendar. Tap to add again":"Add to calendar"}">${calOn(t)?"On calendar ✓":"Calendar"}</button>`:""}<button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
       li.querySelector(".chk").onchange=e=>{t.done=e.target.checked;t.doneAt=t.done?Date.now():null;if(t.done)addLog("Done: "+t.text+" ("+name(t.cat)+")",true);syncFromTask(t);save();renderBoard();renderWeek()};
       const back=li.querySelector(".act.back"),del=li.querySelector(".act.del"),calb=li.querySelector(".act.cal");
-      if(calb)calb.onclick=async()=>{if(await addToCalendar(t.text,calInfo(t.text,t.due)))markCal(t,null)};
+      if(calb)calb.onclick=async()=>{const m=await addToCalendar(t.text,calInfo(t.text,t.due));if(m)markCal(t,null,m)};
       back.onclick=()=>{const old=t.cat;t.cat="inbox";save();renderBoard();renderInbox();toast("Moved to your inbox on the Dump tab",()=>{t.cat=old;save();renderBoard();renderInbox()})};
       del.onclick=()=>deleteTask(t);
       li.querySelector(".more").onclick=()=>{openTask=openTask===t.id?null:t.id;renderBoard()};
@@ -597,13 +590,23 @@ function weekCalDate(it){
 }
 function icsEsc(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n")}
 function icsStamp(d){return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"T"+pad(d.getHours())+pad(d.getMinutes())+"00"}
+function nativeSP(){try{const C=window.Capacitor;if(C&&C.isNativePlatform&&C.isNativePlatform())return nativeSP.p||(nativeSP.p=C.registerPlugin("Sprints"))}catch(e){}return null}
 async function saveFile(filename,data,type){
+  const sp=nativeSP();if(sp){await sp.saveFile({filename,data,mime:type});return}
   if(typeof downloads!=="undefined"&&downloads){await downloads.save({filename,data});return}
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([data],{type}));a.download=filename;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href),10000);
 }
 async function addToCalendar(text,info){
-  if(!info)return;
+  if(!info)return false;
+  const sp=nativeSP();
+  if(sp){
+    let start,end,allDay=false;
+    if(info.time){start=new Date(info.ds+"T"+info.time+":00").getTime();end=start+3600000}
+    else{const [y,m,d]=info.ds.split("-").map(Number);start=Date.UTC(y,m-1,d);end=start+864e5;allDay=true}
+    try{const r=await sp.addEvent({title:text,start,end,allDay});return r&&r.direct?"direct":"screen"}
+    catch(e){toast("Couldn’t add to calendar");return false}
+  }
   const now=new Date(),u=new Date(now.getTime()+now.getTimezoneOffset()*60000);
   const lines=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Kaizen Sprints//EN","BEGIN:VEVENT","UID:"+uid()+"@sprints","DTSTAMP:"+icsStamp(u)+"Z","SUMMARY:"+icsEsc(text)];
   if(info.time){
@@ -615,7 +618,7 @@ async function addToCalendar(text,info){
   }
   lines.push("END:VEVENT","END:VCALENDAR");
   const slug=text.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,30)||"event";
-  try{await saveFile("event-"+slug+".ics",lines.join("\r\n")+"\r\n","text/calendar");return true}
+  try{await saveFile("event-"+slug+".ics",lines.join("\r\n")+"\r\n","text/calendar");return "file"}
   catch(e){toast("Couldn’t make the calendar file");return false}
 }
 function linkedPair(task,item){
@@ -624,10 +627,10 @@ function linkedPair(task,item){
   return{task,item};
 }
 function calOn(task,item){const p=linkedPair(task,item);return !!((p.task&&p.task.cal)||(p.item&&p.item.cal))}
-function markCal(task,item){
+function markCal(task,item,mode){
   const p=linkedPair(task,item),prev={t:p.task&&p.task.cal,i:p.item&&p.item.cal};
   if(p.task)p.task.cal=true;if(p.item)p.item.cal=true;save();renderBoard();renderWeek();
-  toast("Marked as on your calendar. Open the file and tap Save.",()=>{if(p.task)p.task.cal=prev.t;if(p.item)p.item.cal=prev.i;save();renderBoard();renderWeek()});
+  toast(mode==="direct"?"Added to your calendar":mode==="screen"?"Check the details and tap Save":"Marked as on your calendar. Open the file and tap Save.",()=>{if(p.task)p.task.cal=prev.t;if(p.item)p.item.cal=prev.i;save();renderBoard();renderWeek()});
 }
 
 /* Repeating tasks */
@@ -778,7 +781,7 @@ function renderWeek(){
   $("#wkWarn").innerHTML=busy.length?`<p class="warn">${busy.join(" and ")} ${busy.length>1?"look":"looks"} packed. Keep the starred ones and move a few dots.</p>`:"";
   const it=el=>wk(wkOff).items.find(x=>x.id===el.closest("tr").dataset.id);
   t.querySelectorAll(".trow .chk").forEach(c=>c.onchange=e=>{const x=it(c);x.done=e.target.checked;if(x.done&&wkOff===0)markToday(x,ymd(monday(0)));if(x.link){const tk=S.tasks.find(y=>y.id===x.link);if(tk){tk.done=x.done;tk.doneAt=x.done?Date.now():null}}if(x.done)addLog("Done (week plan): "+x.text,true);save();renderWeek();renderBoard()});
-  t.querySelectorAll(".trow .calbtn").forEach(b=>b.onclick=()=>{const x=it(b);const ds=weekCalDate(x);if(ds)addToCalendar(x.text,{ds,time:parseLine(x.text).time}).then(ok=>{if(ok)markCal(null,x)})});
+  t.querySelectorAll(".trow .calbtn").forEach(b=>b.onclick=()=>{const x=it(b);const ds=weekCalDate(x);if(ds)addToCalendar(x.text,{ds,time:parseLine(x.text).time}).then(m=>{if(m)markCal(null,x,m)})});
   t.querySelectorAll(".trow .star").forEach(b=>b.onclick=()=>{const x=it(b);x.star=!x.star;save();renderWeek()});
   t.querySelectorAll(".trow .mini").forEach(b=>b.onclick=()=>{const x=it(b);const tk=x.link?S.tasks.find(y=>y.id===x.link):null;
     if(tk){deleteTask(tk);return}
@@ -853,11 +856,11 @@ $("#backupSave").onclick=async()=>{
   const data=JSON.stringify(Object.assign({},S,{lastBackup:Date.now()}),null,1);
   const filename="kaizen-sprints-backup-"+today()+".json";
   try{
-    if(downloads){await downloads.save({filename,data})}
-    else{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([data],{type:"application/json"}));a.download=filename;document.body.appendChild(a);a.click();a.remove()}
+    await saveFile(filename,data,"application/json");
     S.lastBackup=Date.now();save();renderBackup();toast("Backup saved to your phone");
   }catch(e){toast("Backup not saved")}
 };
+if(nativeSP()){const bf=$("#backupFile");if(bf)bf.removeAttribute("accept")}
 $("#backupFile").onchange=e=>{
   const f=e.target.files&&e.target.files[0];if(!f)return;
   const r=new FileReader();
@@ -874,6 +877,5 @@ $("#backupFile").onchange=e=>{
 };
 })();
 </script>
-<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("sw.js").catch(()=>{})})}</script>
 </body>
 </html>
