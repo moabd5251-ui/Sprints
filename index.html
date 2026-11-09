@@ -192,13 +192,6 @@ textarea{width:100%;min-height:150px;border:1.5px solid var(--line);background:v
 .act.del{color:var(--urgent);border-color:color-mix(in srgb,var(--urgent) 45%,transparent)}
 @media (prefers-reduced-motion: reduce){.toast{transition:none}}
 </style>
-<meta name="theme-color" content="#1B2533">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Sprints">
 </head>
 <body>
 <div class="wrap">
@@ -386,7 +379,35 @@ async function flush(){
   if(pending){pending=false;flush()}
 }
 
-function addLog(text,auto){S.log.push({id:uid(),t:new Date().toISOString(),text,auto:!!auto})}
+function addLog(text,auto,ref){const e={id:uid(),t:new Date().toISOString(),text,auto:!!auto};if(ref)e.ref=ref;S.log.push(e);return e}
+function refItems(ref){
+  let t=null,x=null;
+  if(ref&&ref.task){t=S.tasks.find(y=>y.id===ref.task)||null;if(t){const f=findWeekItem(t);if(f)x=f.it}}
+  if(ref&&ref.week){const w=S.weeks&&S.weeks[ref.key];x=w?(w.items.find(y=>y.id===ref.week)||null):null;if(x&&x.link)t=S.tasks.find(y=>y.id===x.link)||null}
+  return{t,x};
+}
+function reopenRef(ref,logId){
+  const {t,x}=refItems(ref);
+  if(t){t.done=false;t.doneAt=null}
+  if(x){x.done=false;if(ref.cells)x.cells=JSON.parse(ref.cells)}
+  if(logId)S.log=S.log.filter(e=>e.id!==logId);
+  save();renderBoard();renderWeek();renderLog();
+}
+function completeTask(t){
+  const lw=findWeekItem(t);const ref={task:t.id};if(lw)ref.cells=JSON.stringify(lw.it.cells||{});
+  t.done=true;t.doneAt=Date.now();syncFromTask(t);
+  const e=addLog("Done: "+t.text+" ("+name(t.cat)+")",true,ref);
+  save();renderBoard();renderWeek();renderLog();
+  toast("Done! It’s in your log now",()=>reopenRef(ref,e.id));
+}
+function completeWeekItem(x,key){
+  const ref={week:x.id,key,cells:JSON.stringify(x.cells||{})};
+  x.done=true;markToday(x,key);
+  if(x.link){const tk=S.tasks.find(y=>y.id===x.link);if(tk){tk.done=true;tk.doneAt=Date.now()}}
+  const e=addLog("Done: "+x.text+" (week plan)",true,ref);
+  save();renderWeek();renderBoard();renderLog();
+  toast("Done! It’s in your log now",()=>reopenRef(ref,e.id));
+}
 
 /* Daily rollover and deadline promotion */
 function maintain(){
@@ -441,7 +462,7 @@ function rail(m,chk,stop){
 function renderBoard(){
   const b=$("#board");b.innerHTML="";
   CATS.forEach(c=>{
-    const items=S.tasks.filter(t=>t.cat===c.k).sort((a,z)=>(a.done-z.done)||((a.due||"9")>(z.due||"9")?1:-1));
+    const items=S.tasks.filter(t=>t.cat===c.k&&!t.done).sort((a,z)=>(a.done-z.done)||((a.due||"9")>(z.due||"9")?1:-1));
     const open=items.filter(t=>!t.done).length;
     const isActive=S.active&&S.active.cat===c.k;
     const col=document.createElement("div");
@@ -460,7 +481,7 @@ function renderBoard(){
       const meta=[t.done?`<span>done</span>`:t.due?`<span class="${late?"late":""}">${dueLabel(t.due)}</span>`:"",t.rep?`<span>↻ repeats</span>`:"",t.wk?`<span>on week plan</span>`:"",calInfo(t.text,t.due)&&calOn(t)?`<span class="calok">📅 on calendar</span>`:""].filter(Boolean).join("");
       li.innerHTML=`<input type="checkbox" class="chk" ${t.done?"checked":""} aria-label="Done"><div class="tbody"><span class="txt">${esc(t.text)}</span>${meta?`<div class="meta">${meta}</div>`:""}</div><button class="more" aria-label="More actions" aria-expanded="${openTask===t.id}">⋯</button>
         <span class="acts row">${calInfo(t.text,t.due)?`<button class="act cal ${calOn(t)?"on":""}" aria-label="${calOn(t)?"On calendar. Tap to add again":"Add to calendar"}">${calOn(t)?"On calendar ✓":"Calendar"}</button>`:""}<button class="act back" aria-label="Move back to inbox">Inbox</button><button class="act del" aria-label="Delete">Delete</button></span>`;
-      li.querySelector(".chk").onchange=e=>{t.done=e.target.checked;t.doneAt=t.done?Date.now():null;if(t.done)addLog("Done: "+t.text+" ("+name(t.cat)+")",true);syncFromTask(t);save();renderBoard();renderWeek()};
+      li.querySelector(".chk").onchange=e=>{if(e.target.checked)completeTask(t)};
       const back=li.querySelector(".act.back"),del=li.querySelector(".act.del"),calb=li.querySelector(".act.cal");
       if(calb)calb.onclick=async()=>{const m=await addToCalendar(t.text,calInfo(t.text,t.due));if(m)markCal(t,null,m)};
       back.onclick=()=>{const old=t.cat;t.cat="inbox";save();renderBoard();renderInbox();toast("Moved to your inbox on the Dump tab",()=>{t.cat=old;save();renderBoard();renderInbox()})};
@@ -597,7 +618,7 @@ function weekCalDate(it){
 }
 function icsEsc(s){return String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n")}
 function icsStamp(d){return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+"T"+pad(d.getHours())+pad(d.getMinutes())+"00"}
-function nativeSP(){try{const C=window.Capacitor;if(C&&C.isNativePlatform&&C.isNativePlatform())return nativeSP.p||(nativeSP.p=C.registerPlugin("Sprints"))}catch(e){}return null}
+function nativeSP(){try{const C=window.Capacitor;if(C&&C.isNativePlatform&&C.isNativePlatform()&&C.nativePromise)return{addEvent:o=>C.nativePromise("Sprints","addEvent",o),saveFile:o=>C.nativePromise("Sprints","saveFile",o)}}catch(e){}return null}
 async function saveFile(filename,data,type){
   const sp=nativeSP();if(sp){await sp.saveFile({filename,data,mime:type});return}
   if(typeof downloads!=="undefined"&&downloads){await downloads.save({filename,data});return}
@@ -713,8 +734,10 @@ function renderLog(){
     const label=k===new Date().toDateString()?"Today":new Date(k).toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"});
     sec.innerHTML=`<h3>${label}</h3>`;
     byDay[k].forEach(e=>{const r=document.createElement("div");r.className="entry"+(e.auto?" auto":"");
-      r.innerHTML=`<time>${hm(new Date(e.t))}</time><span>${esc(e.text)}</span><button class="mini" aria-label="Delete entry">×</button>`;
-      r.querySelector("button").onclick=()=>{S.log=S.log.filter(x=>x.id!==e.id);save();renderLog()};sec.appendChild(r)});
+      const ri=e.ref?refItems(e.ref):{};const canBack=(ri.t&&ri.t.done)||(ri.x&&ri.x.done);
+      r.innerHTML=`<time>${hm(new Date(e.t))}</time><span>${esc(e.text)}${canBack?` <button class="act back" style="margin-left:6px;padding:2px 9px">Bring back</button>`:""}</span><button class="mini del" aria-label="Delete entry">×</button>`;
+      if(canBack)r.querySelector(".act.back").onclick=()=>{reopenRef(e.ref,e.id);toast("Back on your list")};
+      r.querySelector(".mini.del").onclick=()=>{S.log=S.log.filter(x=>x.id!==e.id);save();renderLog()};sec.appendChild(r)});
     box.appendChild(sec);
   });
 }
@@ -775,8 +798,9 @@ function renderWeek(){
   if((w.steps||["","",""]).length<5){const b=document.createElement("button");b.className="btn ghost";b.style.justifySelf="start";b.textContent="Add a step";b.onclick=()=>{const x=wk(wkOff);x.steps=x.steps||["","",""];x.steps.push("");save();renderWeek()};st.appendChild(b)}
   const t=$("#wkTable");
   let html=`<thead><tr>${DAYS.map((d,i)=>`<th class="${i===todayIdx?"today":""}" title="${DAYN[i]}"><span>${d}</span></th>`).join("")}</tr></thead><tbody>`;
-  if(!w.items.length)html+=`<tr><td colspan="7" class="empty" style="padding:10px 0">No tasks for this week yet. Add one below.</td></tr>`;
-  w.items.forEach(it=>{
+  const shown=w.items.filter(it=>!it.done);
+  if(!shown.length)html+=`<tr><td colspan="7" class="empty" style="padding:10px 0">${w.items.length?"All done for this week. Finished tasks are in your log.":"No tasks for this week yet. Add one below."}</td></tr>`;
+  shown.forEach(it=>{
     html+=`<tr class="trow ${it.done?"done":""}" data-id="${it.id}"><td colspan="7"><div class="wk-task"><input type="checkbox" class="chk" ${it.done?"checked":""} aria-label="Done"><button class="star ${it.star?"on":""}" aria-label="Non-negotiable">★</button><span class="txt">${esc(it.text)}${it.link&&S.tasks.some(y=>y.id===it.link)?`<span class="linked">· in sprints</span>`:""}</span>${weekCalDate(it)?`<button class="mini calbtn" aria-label="${calOn(null,it)?"On calendar. Tap to add again":"Add to calendar"}" title="${calOn(null,it)?"On calendar":"Add to calendar"}">${calOn(null,it)?"✅":"📅"}</button>`:""}<button class="mini" aria-label="Delete">×</button></div></td></tr>`+
       `<tr class="drow" data-id="${it.id}">`+DAYS.map((d,i)=>{const v=(it.cells||{})[i]||"";return `<td class="cell ${i===todayIdx?"today":""}"><button class="dot ${v}" data-i="${i}" aria-label="${DAYN[i]}: ${v||"empty"}"><i></i></button></td>`}).join("")+`</tr>`;
   });
@@ -787,7 +811,7 @@ function renderWeek(){
   const busy=counts.map((c,i)=>c>=7?DAYN[i]:null).filter(Boolean);
   $("#wkWarn").innerHTML=busy.length?`<p class="warn">${busy.join(" and ")} ${busy.length>1?"look":"looks"} packed. Keep the starred ones and move a few dots.</p>`:"";
   const it=el=>wk(wkOff).items.find(x=>x.id===el.closest("tr").dataset.id);
-  t.querySelectorAll(".trow .chk").forEach(c=>c.onchange=e=>{const x=it(c);x.done=e.target.checked;if(x.done&&wkOff===0)markToday(x,ymd(monday(0)));if(x.link){const tk=S.tasks.find(y=>y.id===x.link);if(tk){tk.done=x.done;tk.doneAt=x.done?Date.now():null}}if(x.done)addLog("Done (week plan): "+x.text,true);save();renderWeek();renderBoard()});
+  t.querySelectorAll(".trow .chk").forEach(c=>c.onchange=e=>{if(e.target.checked)completeWeekItem(it(c),ymd(monday(wkOff)))});
   t.querySelectorAll(".trow .calbtn").forEach(b=>b.onclick=()=>{const x=it(b);const ds=weekCalDate(x);if(ds)addToCalendar(x.text,{ds,time:parseLine(x.text).time}).then(m=>{if(m)markCal(null,x,m)})});
   t.querySelectorAll(".trow .star").forEach(b=>b.onclick=()=>{const x=it(b);x.star=!x.star;save();renderWeek()});
   t.querySelectorAll(".trow .mini").forEach(b=>b.onclick=()=>{const x=it(b);const tk=x.link?S.tasks.find(y=>y.id===x.link):null;
@@ -884,6 +908,5 @@ $("#backupFile").onchange=e=>{
 };
 })();
 </script>
-<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("sw.js").catch(()=>{})})}</script>
 </body>
 </html>
